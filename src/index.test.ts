@@ -123,7 +123,7 @@ describe('RateLimiter implementations', () => {
       expect(await limiter.limit(id)).toBe(false);
     });
 
-    it('blocked actions count as actions', async () => {
+    it('blocked actions do not count as actions', async () => {
       const options = { interval: 10, maxInInterval: 3 };
       const limiter = await createLimiter(options);
 
@@ -138,11 +138,11 @@ describe('RateLimiter implementations', () => {
       expect(await limiter.limit(id)).toBe(true);
       expect(await limiter.limit(id)).toBe(true);
 
-      // The first 3 actions have cleared, but two still remain, so we should
-      // only allow one more.
+      // The first 3 actions have cleared, and the second two (blocked) should
+      // not count towards the rate limit
       setTime(options.interval);
       expect(await limiter.limit(id)).toBe(false);
-      expect(await limiter.limit(id)).toBe(true);
+      expect(await limiter.limit(id)).toBe(false);
     });
 
     it('prevents actions less than minDistance apart', async () => {
@@ -220,16 +220,25 @@ describe('RateLimiter implementations', () => {
         blocked: true,
         blockedDueToCount: true,
         blockedDueToMinDifference: false,
-        millisecondsUntilAllowed: 6, // at 14, the second action will clear
+        millisecondsUntilAllowed: 2, // at 10, the first action will clear
+        actionsRemaining: 0,
+      });
+
+      setTime(9);
+      expect(await limiter.wouldLimitWithInfo(id)).toEqual({
+        blocked: true,
+        blockedDueToCount: true,
+        blockedDueToMinDifference: false,
+        millisecondsUntilAllowed: 1, // at 10, the first action will clear
         actionsRemaining: 0,
       });
 
       setTime(11);
       expect(await limiter.wouldLimitWithInfo(id)).toEqual({
-        blocked: true,
-        blockedDueToCount: true,
+        blocked: false,
+        blockedDueToCount: false,
         blockedDueToMinDifference: false,
-        millisecondsUntilAllowed: 4, // at 15, the third action will clear
+        millisecondsUntilAllowed: 3, // at 14, the second action will clear
         actionsRemaining: 0,
       });
 
@@ -239,7 +248,7 @@ describe('RateLimiter implementations', () => {
         blockedDueToCount: false,
         blockedDueToMinDifference: false,
         millisecondsUntilAllowed: 0,
-        actionsRemaining: 1,
+        actionsRemaining: 2, // third action cleared at 15
       });
     });
 
@@ -279,16 +288,16 @@ describe('RateLimiter implementations', () => {
         blocked: true,
         blockedDueToCount: true,
         blockedDueToMinDifference: false,
-        millisecondsUntilAllowed: 6, // at 14, the second action will clear
+        millisecondsUntilAllowed: 2, // at 10, the first action will clear
         actionsRemaining: 0,
       });
 
       setTime(11);
       expect(await limiter.wouldLimitWithInfo(id)).toEqual({
-        blocked: true,
-        blockedDueToCount: true,
+        blocked: false,
+        blockedDueToCount: false,
         blockedDueToMinDifference: false,
-        millisecondsUntilAllowed: 4, // at 15, the third action will clear
+        millisecondsUntilAllowed: 3, // at 14, the second action will clear
         actionsRemaining: 0,
       });
 
@@ -298,7 +307,7 @@ describe('RateLimiter implementations', () => {
         blockedDueToCount: false,
         blockedDueToMinDifference: false,
         millisecondsUntilAllowed: 2,
-        actionsRemaining: 1,
+        actionsRemaining: 2,
       });
     });
   }

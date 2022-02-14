@@ -60,9 +60,8 @@ export class RateLimiter {
    * Returns information about what would happen if an action were attempted for the provided ID.
    */
   async wouldLimitWithInfo(id: Id): Promise<RateLimitInfo> {
-    const currentTimestamp = getCurrentMicroseconds();
-    const existingTimestamps = await this.getTimestamps(id, false);
-    return this.calculateInfo([...existingTimestamps, currentTimestamp]);
+    const timestamps = await this.getTimestamps(id, false);
+    return this.calculateInfo(timestamps);
   }
 
   /**
@@ -98,15 +97,14 @@ export class RateLimiter {
   }
 
   /**
-   * Given a list of timestamps, computes the RateLimitingInfo. The last item in the list is the
-   * timestamp of the current action.
+   * Given a list of previous timestamps, computes the RateLimitingInfo. List should not include timestamp for the current action.
    */
   private calculateInfo(timestamps: Array<Microseconds>): RateLimitInfo {
-    const numTimestamps = timestamps.length;
-    const currentTimestamp = timestamps[numTimestamps - 1];
-    const previousTimestamp = timestamps[numTimestamps - 2];
+    const numPreviousTimestamps = timestamps.length;
+    const currentTimestamp = getCurrentMicroseconds();
+    const previousTimestamp = timestamps[numPreviousTimestamps - 1];
 
-    const blockedDueToCount = numTimestamps > this.maxInInterval;
+    const blockedDueToCount = numPreviousTimestamps >= this.maxInInterval;
     const blockedDueToMinDifference =
       previousTimestamp != null &&
       currentTimestamp - previousTimestamp < this.minDifference;
@@ -117,10 +115,12 @@ export class RateLimiter {
     // If maxInInterval has been reached, also check how long will be required
     // until the interval is not full anymore.
     const microsecondsUntilUnblocked =
-      numTimestamps >= this.maxInInterval
-        ? (timestamps[Math.max(0, numTimestamps - this.maxInInterval)] as number) -
-          (currentTimestamp as number) +
-          (this.interval as number)
+      numPreviousTimestamps + 1 >= this.maxInInterval
+        ? (timestamps[
+          Math.max(0, numPreviousTimestamps - this.maxInInterval)
+        ] as number) -
+        (currentTimestamp as number) +
+        (this.interval as number)
         : 0;
 
     const microsecondsUntilAllowed = Math.max(
@@ -133,7 +133,7 @@ export class RateLimiter {
       blockedDueToCount,
       blockedDueToMinDifference,
       millisecondsUntilAllowed: microsecondsToMilliseconds(microsecondsUntilAllowed),
-      actionsRemaining: Math.max(0, this.maxInInterval - numTimestamps),
+      actionsRemaining: Math.max(0, this.maxInInterval - numPreviousTimestamps - 1),
     };
   }
 }
@@ -166,7 +166,9 @@ export class InMemoryRateLimiter extends RateLimiter {
     const clearBefore = currentTimestamp - this.interval;
     const storedTimestamps = (this.storage[id] || []).filter((t) => t > clearBefore);
 
-    if (addNewTimestamp) {
+    const previousTimestamps = [...storedTimestamps];
+
+    if (addNewTimestamp && storedTimestamps.length < this.maxInInterval) {
       storedTimestamps.push(currentTimestamp);
 
       // Set a new TTL, and cancel the old one, if present.
@@ -180,7 +182,7 @@ export class InMemoryRateLimiter extends RateLimiter {
 
     // Return the new stored timestamps.
     this.storage[id] = storedTimestamps;
-    return storedTimestamps as Array<Microseconds>;
+    return previousTimestamps as Array<Microseconds>;
   }
 }
 
@@ -196,6 +198,7 @@ interface RedisClient {
 
 /** Minimal interface of a Redis batch command needed for algorithm. */
 interface RedisBatch {
+  zremrangebyrank(key: string, min: number, max: number): void;
   zremrangebyscore(key: string, min: number, max: number): void;
   zadd(key: string, score: string | number, value: string): void;
   zrange(key: string, min: number, max: number, withScores: unknown): void;
@@ -242,17 +245,20 @@ export class RedisRateLimiter extends RateLimiter {
 
     const batch = this.client.multi();
     batch.zremrangebyscore(key, 0, clearBefore);
+    batch.zrange(key, 0, -1, 'WITHSCORES');
     if (addNewTimestamp) {
       batch.zadd(key, String(now), uuid());
+      // Cap the max size of the set, effectively undoing zadd if the rate
+      // limit has been hit
+      batch.zremrangebyrank(key, this.maxInInterval, -1);
     }
-    batch.zrange(key, 0, -1, 'WITHSCORES');
     batch.expire(key, this.ttl);
 
     return new Promise((resolve, reject) => {
       batch.exec((err, result) => {
         if (err) return reject(err);
 
-        const zRangeOutput = (addNewTimestamp ? result[2] : result[1]) as Array<unknown>;
+        const zRangeOutput = result[1] as Array<unknown>;
         const zRangeResult = this.getZRangeResult(zRangeOutput);
         const timestamps = this.extractTimestampsFromZRangeResult(zRangeResult);
         return resolve(timestamps);
