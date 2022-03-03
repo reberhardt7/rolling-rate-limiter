@@ -123,8 +123,30 @@ describe('RateLimiter implementations', () => {
       expect(await limiter.limit(id)).toBe(false);
     });
 
-    it('blocked actions do not count as actions', async () => {
+    it('blocked actions count as actions', async () => {
       const options = { interval: 10, maxInInterval: 3 };
+      const limiter = await createLimiter(options);
+
+      // Block this id.
+      setTime(0);
+      await limiter.limit(id);
+      await limiter.limit(id);
+      await limiter.limit(id);
+
+      // `interval` time has not passed, so we should still block all actions.
+      setTime(options.interval - 1);
+      expect(await limiter.limit(id)).toBe(true);
+      expect(await limiter.limit(id)).toBe(true);
+
+      // The first 3 actions have cleared, but two still remain, so we should
+      // only allow one more.
+      setTime(options.interval);
+      expect(await limiter.limit(id)).toBe(false);
+      expect(await limiter.limit(id)).toBe(true);
+    });
+
+    it('blocked actions do not count as actions when countBlockedRequests=false', async () => {
+      const options = { interval: 10, maxInInterval: 3, countBlockedRequests: false };
       const limiter = await createLimiter(options);
 
       // Block this id.
@@ -220,6 +242,65 @@ describe('RateLimiter implementations', () => {
         blocked: true,
         blockedDueToCount: true,
         blockedDueToMinDifference: false,
+        millisecondsUntilAllowed: 6, // at 14, the second action will clear
+        actionsRemaining: 0,
+      });
+
+      setTime(11);
+      expect(await limiter.wouldLimitWithInfo(id)).toEqual({
+        blocked: true,
+        blockedDueToCount: true,
+        blockedDueToMinDifference: false,
+        millisecondsUntilAllowed: 4, // at 15, the third action will clear
+        actionsRemaining: 0,
+      });
+
+      setTime(17);
+      expect(await limiter.wouldLimitWithInfo(id)).toEqual({
+        blocked: false,
+        blockedDueToCount: false,
+        blockedDueToMinDifference: false,
+        millisecondsUntilAllowed: 0,
+        actionsRemaining: 1,
+      });
+    });
+
+    it('returns info about limiting (no min distance) (countBlockedRequests=false)', async () => {
+      const options = { interval: 10, maxInInterval: 3, countBlockedRequests: false };
+      const limiter = await createLimiter(options);
+
+      setTime(0);
+      expect(await limiter.limitWithInfo(id)).toEqual({
+        blocked: false,
+        blockedDueToCount: false,
+        blockedDueToMinDifference: false,
+        millisecondsUntilAllowed: 0,
+        actionsRemaining: 2,
+      });
+
+      setTime(4);
+      expect(await limiter.limitWithInfo(id)).toEqual({
+        blocked: false,
+        blockedDueToCount: false,
+        blockedDueToMinDifference: false,
+        millisecondsUntilAllowed: 0,
+        actionsRemaining: 1,
+      });
+
+      setTime(5);
+      expect(await limiter.limitWithInfo(id)).toEqual({
+        blocked: false,
+        blockedDueToCount: false,
+        blockedDueToMinDifference: false,
+        millisecondsUntilAllowed: 5, // at 10, the first action will clear
+        actionsRemaining: 0,
+      });
+
+      setTime(8);
+      expect(await limiter.limitWithInfo(id)).toEqual({
+        blocked: true,
+        blockedDueToCount: true,
+        blockedDueToMinDifference: false,
         millisecondsUntilAllowed: 2, // at 10, the first action will clear
         actionsRemaining: 0,
       });
@@ -254,6 +335,70 @@ describe('RateLimiter implementations', () => {
 
     it('returns info about limiting (with min distance)', async () => {
       const options = { interval: 10, maxInInterval: 3, minDifference: 2 };
+      const limiter = await createLimiter(options);
+
+      setTime(0);
+      expect(await limiter.limitWithInfo(id)).toEqual({
+        blocked: false,
+        blockedDueToCount: false,
+        blockedDueToMinDifference: false,
+        millisecondsUntilAllowed: 2, // due to minDifference
+        actionsRemaining: 2,
+      });
+
+      setTime(4);
+      expect(await limiter.limitWithInfo(id)).toEqual({
+        blocked: false,
+        blockedDueToCount: false,
+        blockedDueToMinDifference: false,
+        millisecondsUntilAllowed: 2, // due to minDifference
+        actionsRemaining: 1,
+      });
+
+      setTime(5);
+      expect(await limiter.limitWithInfo(id)).toEqual({
+        blocked: true,
+        blockedDueToCount: false,
+        blockedDueToMinDifference: true,
+        millisecondsUntilAllowed: 5, // at 10, the first action will clear
+        actionsRemaining: 0,
+      });
+
+      setTime(8);
+      expect(await limiter.limitWithInfo(id)).toEqual({
+        blocked: true,
+        blockedDueToCount: true,
+        blockedDueToMinDifference: false,
+        millisecondsUntilAllowed: 6, // at 14, the second action will clear
+        actionsRemaining: 0,
+      });
+
+      setTime(11);
+      expect(await limiter.wouldLimitWithInfo(id)).toEqual({
+        blocked: true,
+        blockedDueToCount: true,
+        blockedDueToMinDifference: false,
+        millisecondsUntilAllowed: 4, // at 15, the third action will clear
+        actionsRemaining: 0,
+      });
+
+      setTime(17);
+      expect(await limiter.wouldLimitWithInfo(id)).toEqual({
+        blocked: false,
+        blockedDueToCount: false,
+        blockedDueToMinDifference: false,
+        millisecondsUntilAllowed: 2,
+        actionsRemaining: 1,
+      });
+    });
+
+    it('returns info about limiting (with min distance) (countBlockedRequests=false)', async () => {
+      const options = {
+        interval: 10,
+        maxInInterval: 3,
+        minDifference: 2,
+        countBlockedRequests: false,
+      };
       const limiter = await createLimiter(options);
 
       setTime(0);
